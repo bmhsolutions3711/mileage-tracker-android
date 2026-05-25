@@ -274,6 +274,44 @@
     font-family: inherit;
   }
   .auth-overlay .err { color: var(--red); font-size: 12px; margin-top: 8px; }
+
+  /* ── Sync modal ────────────────────────────────────────────── */
+  .sync-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+    display: none; align-items: flex-end; justify-content: center;
+    z-index: 50;
+  }
+  .sync-modal.open { display: flex; }
+  .sync-modal-card {
+    background: var(--bg); border-top: 2px solid var(--accent);
+    width: 100%; max-width: 600px; max-height: 90vh;
+    border-radius: 16px 16px 0 0; padding: 20px 18px 18px;
+    display: flex; flex-direction: column;
+  }
+  .sync-modal-head h2 { font-size: 20px; margin: 0 0 6px; }
+  .sync-modal-head p { font-size: 13px; color: var(--text-dim); margin: 0 0 14px; line-height: 1.4; }
+  .sync-day-list { flex: 1; overflow-y: auto; padding-bottom: 10px; }
+  .sync-row {
+    background: var(--card); border-radius: 10px; padding: 12px;
+    margin-bottom: 10px;
+  }
+  .sync-row-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .sync-row-date { font-weight: 600; font-size: 15px; }
+  .sync-row-miles { font-size: 13px; color: var(--text-dim); font-family: ui-monospace,monospace; }
+  .sync-row-input { display: flex; flex-direction: column; gap: 4px; }
+  .sync-row-input span { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .sync-row-input input {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 12px; color: var(--text);
+    font-size: 16px; font-family: inherit;
+  }
+  .sync-modal-actions { display: flex; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .sync-modal-actions .btn { flex: 1; }
+  .btn-ghost {
+    background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border); padding: 14px; border-radius: 10px;
+    font-weight: 600; font-size: 15px; cursor: pointer; font-family: inherit;
+  }
 </style>
 </head>
 <body>
@@ -343,10 +381,25 @@
   <button id="btnSync" class="btn btn-secondary">Sync to BIK</button>
 </div>
 
+<!-- Sync modal: optional trailer-miles per day -->
+<div id="syncModal" class="sync-modal">
+  <div class="sync-modal-card">
+    <div class="sync-modal-head">
+      <h2>Sync to BIK</h2>
+      <p>Enter trailer miles from the truck's log (optional). Leave blank to sync GPS only — you can backfill later.</p>
+    </div>
+    <div id="syncDayList" class="sync-day-list"></div>
+    <div class="sync-modal-actions">
+      <button id="btnSyncCancel" class="btn btn-ghost">Cancel</button>
+      <button id="btnSyncConfirm" class="btn btn-primary">Sync</button>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 
-const BUILD = 'v3-native';
+const BUILD = 'v4-trailer';
 const API_BASE = 'https://bryans-macbook-pro-1.tail1ed408.ts.net:8440/api/finance';
 const TOKEN_KEY = 'mileage_token';
 
@@ -717,14 +770,68 @@ async function renderDays() {
 }
 
 // ── Sync to BIK ─────────────────────────────────────────────────────────
-async function syncToBIK() {
+async function openSyncModal() {
+  const all = await dbAll(STORE_DAYS);
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+  const cutoffStr = localDateStr(cutoff);
+  // Show all unsynced + today (so trailer miles can be added retroactively)
+  const candidates = all
+    .filter(d => d.date >= cutoffStr && d.miles > 0)
+    .sort((a, b) => a.date < b.date ? 1 : -1);
+
+  if (!candidates.length) {
+    showToast('No miles to sync yet', '');
+    return;
+  }
+
+  const modal = document.getElementById('syncModal');
+  const list = document.getElementById('syncDayList');
+  list.innerHTML = candidates.map(d => {
+    const dt = new Date(d.date + 'T00:00:00');
+    const label = dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    const existing = d.trailer_miles != null ? d.trailer_miles : '';
+    return `<div class="sync-row">
+      <div class="sync-row-head">
+        <span class="sync-row-date">${label}</span>
+        <span class="sync-row-miles">${fmtMiles(d.miles)} mi GPS</span>
+      </div>
+      <label class="sync-row-input">
+        <span>Trailer miles (optional)</span>
+        <input type="number" inputmode="decimal" min="0" max="2000" step="0.1"
+               data-date="${d.date}" value="${existing}" placeholder="—">
+      </label>
+    </div>`;
+  }).join('');
+  modal.classList.add('open');
+}
+
+async function runSyncFromModal() {
+  const modal = document.getElementById('syncModal');
+  const inputs = modal.querySelectorAll('input[data-date]');
+  const overrides = {};
+  inputs.forEach(inp => {
+    const v = inp.value.trim();
+    if (v !== '') {
+      const num = parseFloat(v);
+      if (!isNaN(num) && num >= 0 && num <= 2000) overrides[inp.dataset.date] = num;
+    }
+  });
+  modal.classList.remove('open');
+  await syncToBIK(overrides);
+}
+
+async function syncToBIK(trailerOverrides = {}) {
   const all = await dbAll(STORE_DAYS);
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
   const cutoffStr = localDateStr(cutoff);
   const payload = {
     days: all
-      .filter(d => d.date >= cutoffStr)
-      .map(d => ({ date: d.date, miles: d.miles })),
+      .filter(d => d.date >= cutoffStr && d.miles > 0)
+      .map(d => {
+        const row = { date: d.date, miles: d.miles };
+        if (trailerOverrides[d.date] != null) row.trailer_miles = trailerOverrides[d.date];
+        return row;
+      }),
   };
 
   if (!payload.days.length) {
@@ -754,6 +861,7 @@ async function syncToBIK() {
       const row = await dbGet(STORE_DAYS, d.date);
       if (row) {
         row.synced = true;
+        if (d.trailer_miles != null) row.trailer_miles = d.trailer_miles;
         await dbPut(STORE_DAYS, row);
       }
     }
@@ -788,8 +896,20 @@ async function init() {
     $('lastSync').textContent = new Date(lastSync).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
-  $('btnTrack').addEventListener('click', () => isTracking ? stopTracking() : startTracking());
-  $('btnSync').addEventListener('click', syncToBIK);
+  $('btnTrack').addEventListener('click', () => {
+    if (isTracking) {
+      if (confirm('Stop tracking?\n\nThis will end GPS logging. Make sure you really want to stop — accidental taps will lose miles.')) {
+        stopTracking();
+      }
+    } else {
+      startTracking();
+    }
+  });
+  $('btnSync').addEventListener('click', openSyncModal);
+  document.getElementById('btnSyncCancel').addEventListener('click', () => {
+    document.getElementById('syncModal').classList.remove('open');
+  });
+  document.getElementById('btnSyncConfirm').addEventListener('click', runSyncFromModal);
 
   const wasTracking = await getMeta('was_tracking', false);
   if (wasTracking) {
