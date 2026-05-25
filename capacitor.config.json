@@ -1,0 +1,14 @@
+{
+  "appId": "com.bmhsolutions.mileagetracker",
+  "appName": "Mileage Tracker",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "server": {
+    "androidScheme": "https",
+    "cleartext": false
+  }
+}

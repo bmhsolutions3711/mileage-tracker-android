@@ -1,0 +1,16 @@
+node_modules/
+out/
+
+# Capacitor
+.DS_Store
+
+# Android build artifacts (we want source committed; build outputs ignored)
+android/.gradle/
+android/build/
+android/app/build/
+android/captures/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/*.iml
+android/app/release/
