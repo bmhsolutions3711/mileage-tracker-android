@@ -37,6 +37,7 @@
   }
   .header {
     padding: 14px 16px;
+    padding-top: calc(14px + env(safe-area-inset-top, 28px));
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -401,7 +402,7 @@
 <script>
 'use strict';
 
-const BUILD = 'v5-s25';
+const BUILD = 'v5.1-s25';
 const API_BASE = 'https://bryans-macbook-pro-1.tail1ed408.ts.net:8440/api/finance';
 const TOKEN_KEY = 'mileage_token';
 
