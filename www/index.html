@@ -188,6 +188,8 @@
   .btn:disabled { opacity: 0.4; }
   .btn-primary { background: var(--yellow); color: #1a1a1a; }
   .btn-stop { background: var(--red); color: #fff; }
+  .btn-confirm-stop { background: var(--orange); color: #fff; animation: pulse-stop 0.6s ease-in-out infinite alternate; }
+  @keyframes pulse-stop { from { opacity: 0.85; } to { opacity: 1; } }
   .btn-secondary { background: var(--surface2); color: var(--chrome); border: 1px solid var(--border); }
 
   .toast {
@@ -399,7 +401,7 @@
 <script>
 'use strict';
 
-const BUILD = 'v4-trailer';
+const BUILD = 'v5-s25';
 const API_BASE = 'https://bryans-macbook-pro-1.tail1ed408.ts.net:8440/api/finance';
 const TOKEN_KEY = 'mileage_token';
 
@@ -655,6 +657,28 @@ async function onPosition(pos) {
     $('lastFixInfo').textContent = 'first fix · acc ' + (accuracy ? accuracy.toFixed(0) + 'm' : '?');
   }
   lastFix = { lat, lng, t, speed: speedMps };
+
+  // Push live position to backend ~every 60s so weather watcher + Atlas know where we are
+  if (!window._lastLocPush || (t - window._lastLocPush) > 60000) {
+    window._lastLocPush = t;
+    pushLiveLocation(lat, lng, accuracy, speedMph, pos.coords.heading).catch(() => {});
+  }
+}
+
+async function pushLiveLocation(lat, lng, accuracy, speedMph, heading) {
+  try {
+    await fetch(API_BASE + '/location', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        lat, lng,
+        accuracy: accuracy || null,
+        speed_mph: speedMph || 0,
+        heading: heading || null,
+        fix_ts: new Date().toISOString(),
+      }),
+    });
+  } catch (e) { /* offline — fine */ }
 }
 
 function onPosError(err) {
@@ -896,10 +920,27 @@ async function init() {
     $('lastSync').textContent = new Date(lastSync).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
+  let _stopConfirmTimer = null;
   $('btnTrack').addEventListener('click', () => {
     if (isTracking) {
-      if (confirm('Stop tracking?\n\nThis will end GPS logging. Make sure you really want to stop — accidental taps will lose miles.')) {
+      const btn = $('btnTrack');
+      if (btn.dataset.confirmStop === 'true') {
+        // Second tap — actually stop
+        clearTimeout(_stopConfirmTimer);
+        btn.dataset.confirmStop = '';
         stopTracking();
+      } else {
+        // First tap — go to confirm state for 3s
+        btn.dataset.confirmStop = 'true';
+        btn.textContent = 'Confirm Stop';
+        btn.classList.remove('btn-stop');
+        btn.classList.add('btn-confirm-stop');
+        _stopConfirmTimer = setTimeout(() => {
+          btn.dataset.confirmStop = '';
+          btn.textContent = 'Stop';
+          btn.classList.remove('btn-confirm-stop');
+          btn.classList.add('btn-stop');
+        }, 3000);
       }
     } else {
       startTracking();
